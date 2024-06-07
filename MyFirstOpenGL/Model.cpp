@@ -34,6 +34,7 @@ Model::Model(const std::vector<float>& vertexs, const std::vector<float>& uvs, c
     //Activamos el atributo 0 (posiciones por defecto)
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
+    glEnableVertexAttribArray(2);
 
     //Desvinculamos VAO y VBO
     glBindBuffer(GL_ARRAY_BUFFER, 0);
