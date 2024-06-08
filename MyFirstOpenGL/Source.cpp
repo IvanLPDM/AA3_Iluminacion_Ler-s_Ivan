@@ -15,6 +15,10 @@
 #define WINDOW_WIDTH 640
 #define WINDOW_HEIGHT 480
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 std::vector<GLuint> compiledPrograms;
 std::vector<Model> models;
 
@@ -28,6 +32,10 @@ enum class CameraStates
 
 CameraStates stateCamera = CameraStates::ORBIT;
 
+struct Light
+{
+	glm::vec3 position;
+};
 
 struct Camera {
 	float fFov = 45.f;
@@ -54,6 +62,12 @@ struct Camera {
 	float fov = 45.0f;
 	float mouseSensitivity = 0.1f;
 	float cameraSpeed = 0.001f; // Adjust accordingly
+	//float maxDistance = 100.0f;
+
+	//Player
+	bool flashlightOn;
+	float innerConeAngle;
+	float outerConeAngle;
 };
 Camera camera;
 
@@ -73,7 +87,7 @@ void processInput(GLFWwindow* window) {
 	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
 	{
 		camera.cameraPos += camera.cameraSpeed * camera.cameraFront;
-		std::cout << "W PRESS" << std::endl;
+		
 	}
 	if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
 		camera.cameraPos -= camera.cameraSpeed * camera.cameraFront;
@@ -81,6 +95,19 @@ void processInput(GLFWwindow* window) {
 		camera.cameraPos -= glm::normalize(glm::cross(camera.cameraFront, camera.cameraUp)) * camera.cameraSpeed;
 	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
 		camera.cameraPos += glm::normalize(glm::cross(camera.cameraFront, camera.cameraUp)) * camera.cameraSpeed;
+
+
+	static bool flashlightKeyPressed = false; 
+
+	if (glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS && !flashlightKeyPressed) {
+		std::cout << "F PRESS" << std::endl;
+		camera.flashlightOn = !camera.flashlightOn;
+		flashlightKeyPressed = true; 
+	}
+	if (glfwGetKey(window, GLFW_KEY_F) == GLFW_RELEASE) {
+		flashlightKeyPressed = false; // Reiniciar la variable booleana cuando se suelta la tecla F
+	}
+		
 }
 
 void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
@@ -114,23 +141,6 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
 	camera.cameraFront = glm::normalize(front);
 }
 
-struct GameObject {
-
-	glm::vec3 position = glm::vec3(0.f);
-	glm::vec3 rotation = glm::vec3(0.f);
-	glm::vec3 scale = glm::vec3(1.f);
-	float r, g, b;
-
-};
-
-
-
-struct ShaderProgram {
-	GLuint vertexShader = 0;
-	GLuint geometryShader = 0;
-	GLuint fragmentShader = 0;
-};
-
 class Texture {
 private:
 	int width, height, nrChannels;
@@ -138,14 +148,24 @@ private:
 	GLuint textureID;
 
 public:
+	Texture()
+	{
+
+	}
 	Texture(const char* id)
 	{
 		imageData = stbi_load(id, &width, &height, &nrChannels, 0);
 	}
 
-	void CreateTexture(const char* id)
+	void CreateTexture(Texture texture)
 	{
-		imageData = stbi_load(id, &width, &height, &nrChannels, 0);
+		const char* id = (const char*)texture.imageData;
+		int _width = texture.width;
+		int _height = texture.height;
+		int _nrChannels = texture.nrChannels;
+
+
+		imageData = stbi_load(id, &_width, &_height, &_nrChannels, 0);
 	}
 
 	void LoadTexture()
@@ -176,17 +196,17 @@ public:
 		stbi_image_free(imageData);
 	}
 
-	void GetCroma(GameObject gameObject)
+	void GetCroma(float r, float g, float b)
 	{
 		//Cromas
 		int valuePosition = glGetUniformLocation(compiledPrograms[0], "color");
 
 		if (valuePosition != -1)
 		{
-			glUniform3f(valuePosition, gameObject.r, gameObject.g, gameObject.b);
+			glUniform3f(valuePosition, r, g, b);
 		}
-		else
-			std::cout << "No se ha podido encontrar la direccion" << std::endl;
+		//else
+			//std::cout << "No se ha podido encontrar la direccion" << std::endl;
 	}
 
 	GLuint GetTextureID()
@@ -195,6 +215,20 @@ public:
 	}
 
 };
+
+
+
+
+
+
+
+struct ShaderProgram {
+	GLuint vertexShader = 0;
+	GLuint geometryShader = 0;
+	GLuint fragmentShader = 0;
+};
+
+
 
 void Resize_Window(GLFWwindow* window, int iFrameBufferWidth, int iFrameBufferHeight) {
 
@@ -220,6 +254,7 @@ glm::mat4 GenerateTranslationMatrix(glm::vec3 translation) {
 
 	return glm::translate(glm::mat4(1.0f), translation);
 }
+
 
 //Funcion que leera un .obj y devolvera un modelo para poder ser renderizado
 Model LoadOBJModel(const std::string& filePath) {
@@ -545,6 +580,70 @@ GLuint CreateProgram(const ShaderProgram& shaders) {
 	}
 }
 
+class GameObject {
+public:
+
+	glm::vec3 position = glm::vec3(0.f);
+	glm::vec3 rotation = glm::vec3(0.f);
+	glm::vec3 scale = glm::vec3(1.f);
+	float r, g, b;
+
+	Texture texture;
+
+	glm::mat4 translationMatrix;
+	glm::mat4 rotationMatrix;
+	glm::mat4 scaleMatrix;
+
+	float angle = 0.0f; // Ángulo inicial
+	float radius = 2.0f; // Radio de la órbita
+	float orbitSpeed = 0.2f; // Velocidad de la órbita
+
+	GameObject(float r, float g, float b, glm::vec3 position, glm::vec3 rotation, glm::vec3 scale, Texture _texture)
+	{
+		this->r = r;
+		this->g = g;
+		this->b = b;
+		this->position = position;
+		this->rotation = rotation;
+		this->scale = scale;
+
+		texture.CreateTexture(_texture);
+	}
+
+	void preCarga()
+	{
+		translationMatrix = GenerateTranslationMatrix(position);
+		rotationMatrix = GenerateRotationMatrix(rotation, rotation.y);
+		scaleMatrix = GenerateScaleMatrix(scale);
+	}
+
+	void Render(Texture _texture)
+	{
+		glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "translationMatrix"), 1, GL_FALSE, glm::value_ptr(translationMatrix));
+		glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "rotationMatrix"), 1, GL_FALSE, glm::value_ptr(rotationMatrix));
+		glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "scaleMatrix"), 1, GL_FALSE, glm::value_ptr(scaleMatrix));
+
+		//Cambiar textura
+		glBindTexture(GL_TEXTURE_2D, _texture.GetTextureID());
+		//Croma
+		_texture.GetCroma(r, g, b);
+	}
+
+	void ObjectLoadTexture()
+	{
+		texture.LoadTexture();
+	}
+
+private:
+
+};
+
+
+void updateSunPosition(GameObject sun, float deltaTime) {
+
+	
+}
+
 void main() {
 
 	//Definir semillas del rand según el tiempo
@@ -563,8 +662,6 @@ void main() {
 
 	//Inicializamos la ventana
 	GLFWwindow* window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "My Engine", NULL, NULL);
-
-
 
 	//Asignamos función de callback para cuando el frame buffer es modificado
 	glfwSetFramebufferSizeCallback(window, Resize_Window);
@@ -590,9 +687,12 @@ void main() {
 	//Leer textura
 	Texture trollTexture("Assets/Textures/troll_v2.png");
 	Texture rockTexture("Assets/Textures/rock_v2.png");
+	Texture sunTexture("Assets/Textures/Cube_Texture.png");
 
 	//Para los fps
 	auto lastTime = std::chrono::high_resolution_clock::now();
+	auto currentTime = std::chrono::high_resolution_clock::now();
+	float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
 
 	//Inicializamos GLEW y controlamos errores
 	if (glewInit() == GLEW_OK) {
@@ -606,34 +706,6 @@ void main() {
 		glEnable(GL_CULL_FACE);
 		glCullFace(GL_BACK);
 
-		GameObject troll1;
-		GameObject troll2;
-		GameObject troll3;
-
-		GameObject rock1;
-
-		GameObject cloud1;
-
-		troll1.r = 1;
-		troll1.g = 1;
-		troll1.b = 1;
-
-		troll2.r = 0;
-		troll2.g = 1;
-		troll2.b = 1;
-
-		troll3.r = 1;
-		troll3.g = 1;
-		troll3.b = 0;
-
-		rock1.r = 1;
-		rock1.g = 1;
-		rock1.b = 1;
-
-		cloud1.r = 3;
-		cloud1.g = 3;
-		cloud1.b = 3;
-
 
 		glm::vec3 lookAt;
 
@@ -646,13 +718,30 @@ void main() {
 		//Cargo Modelo
 		models.push_back(LoadOBJModel("Assets/Models/troll.obj"));
 		models.push_back(LoadOBJModel("Assets/Models/rock.obj"));
+		models.push_back(LoadOBJModel("Assets/Models/ball.obj"));
 
 		//Compilar programa
 		compiledPrograms.push_back(CreateProgram(myFirstProgram));
 
+		GameObject troll1(1, 1, 1, glm::vec3(0.f, 0.f, 0.f), glm::vec3(0.f, 1.f, 0.f), glm::vec3(0.2f, 0.2f, 0.2f), trollTexture);
+		GameObject troll2(0, 1, 1, glm::vec3(0.5f, 0.f, 0.f), glm::vec3(0.f, 315.f, 0.f), glm::vec3(0.2f, 0.2f, 0.2f), trollTexture);
+		GameObject troll3(1, 1, 0, glm::vec3(-0.5f, 0.f, 0.f), glm::vec3(0.f, 45.f, 0.f), glm::vec3(0.2f, 0.2f, 0.2f), trollTexture);
+		GameObject rock1(1, 1, 1, glm::vec3(0.f, 0.f, 0.5f), glm::vec3(0.f, 45.f, 0.f), glm::vec3(0.2f, 0.2f, 0.2f), rockTexture);
+		GameObject cloud1(3, 3, 3, glm::vec3(0.f, 0.8f, 0.f), glm::vec3(180.f, 90.f, 0.f), glm::vec3(0.3f, 0.2f, 0.2f), rockTexture);
+		GameObject sun(255, 0, 0, glm::vec3(0.f, 10.0f, 0.f), glm::vec3(180.f, 90.f, 0.f), glm::vec3(0.001f, 0.001f, 0.001f), sunTexture);
+		GameObject moon(255, 255, 255, glm::vec3(0.f, 10.0f, 0.f), glm::vec3(180.f, 90.f, 0.f), glm::vec3(0.001f, 0.001f, 0.001f), sunTexture);
+		Light lightSun;
+
+		camera.flashlightOn = false;
+		camera.innerConeAngle = 12.5f;
+		camera.outerConeAngle = 17.5f;
+
+		moon.angle = 180;
+
 		//LOAD TEXTURE
 		trollTexture.LoadTexture();
 		rockTexture.LoadTexture();
+		sunTexture.LoadTexture();
 
 		//Definimos color para limpiar el buffer de color
 		glClearColor(0.f, 0.f, 0.f, 1.f);
@@ -676,11 +765,33 @@ void main() {
 
 		while (!glfwWindowShouldClose(window)) {
 
+			currentTime = std::chrono::high_resolution_clock::now();
+			deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
+
 			processInput(window);
 
-			auto currentTime = std::chrono::high_resolution_clock::now();
-			float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
-			lastTime = currentTime;
+			//Movimiento sol
+				// Incrementar el ángulo en función del tiempo
+				sun.angle += sun.orbitSpeed * deltaTime;
+
+				if (sun.angle >= 360.0f) {
+					sun.angle -= 360.0f;
+				}
+
+
+				// Actualizar la posición de la esfera
+				sun.position.y = sun.radius * sin(sun.angle);
+				sun.position.z = sun.radius * cos(sun.angle);
+
+				lightSun.position = sun.position;
+
+			//Movimiento luna
+				// Incrementar el ángulo en función del tiempo
+				moon.angle += moon.orbitSpeed * deltaTime;
+
+				// Actualizar la posición de la esfera
+				moon.position.y = moon.radius * sin(moon.angle);
+				moon.position.z = moon.radius * cos(moon.angle);
 
 			//Pulleamos los eventos (botones, teclas, mouse...)
 			glfwPollEvents();
@@ -702,153 +813,93 @@ void main() {
 				}
 			}
 
-			//Que plano de camara hacer en funcion del input 
-			switch (stateCamera)
-			//{
-			//case CameraStates::STATE1:
+			
 
-			//	//troll izquierda plano general
-			//	camera.position = glm::vec3(camera.position.x, camera.position.y, camera.position.z);
-			//	/*lookAt = glm::vec3(-0.9f, 0.f, 0.f);
-
-			//	camera.fFov = 45;*/
-
-			//	break;
-			//case CameraStates::STATE2:
-
-			//	//troll derecha plano detalle
-			//	camera.position = glm::vec3(0.3f, 0.45f, 0.77f);
-			//	lookAt = glm::vec3(0.9f, 0.f, 0.f);
-
-			//	camera.fFov = 10;
-
-			//	break;
-			//case CameraStates::STATE3:
-
-			//	//troll medio plano
-			//	camera.position = glm::vec3(0.f, 0.5f, 1.2f);
-			//	lookAt = glm::vec3(0.f, 0.f, 0.f); // Punto central de la escena
-
-			//	camera.fFov = 45;
-
-			//	break;
-
-			//case CameraStates::ORBIT:
-
-			//	camera.orbitAngle += camera.orbitVelocity * deltaTime;
-
-			//	cameraX = sin(camera.orbitAngle) * camera.orbitRadius; // Coordenada x
-			//	cameraZ = cos(camera.orbitAngle) * camera.orbitRadius; // Coordenada z
-
-			//	camera.position.x = cameraX;
-			//	camera.position.z = cameraZ;
-
-			//	lookAt = glm::vec3(0.f, 0.f, 0.f); // Punto central de la escena
-
-			//	camera.fFov = 45;
-
-			//	break;
-
-			//default:
-			//	break;
-			//}
-
-			troll1.position = glm::vec3(0.f, 0.f, 0.f);
-			troll1.rotation = glm::vec3(0.f, 1.f, 0.f);
-			troll1.scale = glm::vec3(0.2f, 0.2f, 0.2f);
-
-			troll2.position = glm::vec3(0.5f, 0.f, 0.f);
-			troll2.rotation = glm::vec3(0.f, 315.f, 0.f);
-			troll2.scale = glm::vec3(0.2f, 0.2f, 0.2f);
-
-			troll3.position = glm::vec3(-0.5f, 0.f, 0.f);
-			troll3.rotation = glm::vec3(0.f, 45.f, 0.f);
-			troll3.scale = glm::vec3(0.2f, 0.2f, 0.2f);
-
-			rock1.position = glm::vec3(0.f, 0.f, 0.5f);
-			rock1.rotation = glm::vec3(0.f, 45.f, 0.f);
-			rock1.scale = glm::vec3(0.2f, 0.2f, 0.2f);
-
-			cloud1.position = glm::vec3(0.f, 0.8f, 0.f);
-			cloud1.rotation = glm::vec3(180.f, 90.f, 0.f);
-			cloud1.scale = glm::vec3(0.3f, 0.2f, 0.2f);
-
-			glm::mat4 translationMatrix = GenerateTranslationMatrix(troll1.position);
-			glm::mat4 rotationMatrix = GenerateRotationMatrix(troll1.rotation, troll1.rotation.y);
-			glm::mat4 scaleMatrix = GenerateScaleMatrix(troll1.scale);
-
-			glm::mat4 translationMatrix2 = GenerateTranslationMatrix(troll2.position);
-			glm::mat4 rotationMatrix2 = GenerateRotationMatrix(troll2.rotation, troll2.rotation.y);
-			glm::mat4 scaleMatrix2 = GenerateScaleMatrix(troll2.scale);
-
-			glm::mat4 translationMatrix3 = GenerateTranslationMatrix(troll3.position);
-			glm::mat4 rotationMatrix3 = GenerateRotationMatrix(troll3.rotation, troll3.rotation.y);
-			glm::mat4 scaleMatrix3 = GenerateScaleMatrix(troll3.scale);
-
-			glm::mat4 translationMatrix4 = GenerateTranslationMatrix(rock1.position);
-			glm::mat4 rotationMatrix4 = GenerateRotationMatrix(rock1.rotation, rock1.rotation.y);
-			glm::mat4 scaleMatrix4 = GenerateScaleMatrix(rock1.scale);
-
-			glm::mat4 translationMatrix5 = GenerateTranslationMatrix(cloud1.position);
-			glm::mat4 rotationMatrix5 = GenerateRotationMatrix(cloud1.rotation, cloud1.rotation.y);
-			glm::mat4 scaleMatrix5 = GenerateScaleMatrix(cloud1.scale);
+			troll1.preCarga();
+			troll2.preCarga();
+			troll3.preCarga();
+			rock1.preCarga();
+			cloud1.preCarga();
+			sun.preCarga();
+			moon.preCarga();
 
 			glm::mat4 viewMatrix = glm::lookAt(camera.cameraPos, camera.cameraPos + camera.cameraFront, camera.cameraUp);
 			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "viewMatrix"), 1, GL_FALSE, glm::value_ptr(viewMatrix));
 
 			glm::mat4 projectionMatrix = glm::perspective(glm::radians(camera.fov), (float)WINDOW_WIDTH / (float)WINDOW_HEIGHT, camera.fNear, camera.fFar);
 			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "projectionMatrix"), 1, GL_FALSE, glm::value_ptr(projectionMatrix));
-			
+
 			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "viewMatrix"), 1, GL_FALSE, glm::value_ptr(viewMatrix));
 			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "projectionMatrix"), 1, GL_FALSE, glm::value_ptr(projectionMatrix));
+
+			GLint lightDirLocation = glGetUniformLocation(compiledPrograms[0], "lightDirection");
+			glUniform3f(lightDirLocation, lightSun.position.x, lightSun.position.y, lightSun.position.z);
+			glm::vec3 lightDirection = glm::normalize(glm::vec3(1.0f, -1.0f, 0.0f));
+
+
+
+			
+			glUseProgram(compiledPrograms[0]);
+			GLuint shaderProgram = compiledPrograms[0];
+			GLuint lightPosLoc = glGetUniformLocation(shaderProgram, "lightPosition");
+			GLuint moonPosLoc = glGetUniformLocation(shaderProgram, "moonPosition");
+			GLuint cameraPosLoc = glGetUniformLocation(shaderProgram, "cameraPosition");
+			GLuint cameraFt = glGetUniformLocation(shaderProgram, "cameraFront");
+			GLuint flashlightOnLoc = glGetUniformLocation(shaderProgram, "flashlightOn");
+			
+			GLuint innerConeAngleLoc = glGetUniformLocation(shaderProgram, "innerConeAngle");
+			GLuint outerConeAngleLoc = glGetUniformLocation(shaderProgram, "outerConeAngle");
+
+			//GLuint maxDistanceLoc = glGetUniformLocation(shaderProgram, "maxDistance");
+
+			
+
+			glUniform3f(lightPosLoc, sun.position.x, sun.position.y, sun.position.z);
+			glUniform3f(moonPosLoc, moon.position.x, moon.position.y, moon.position.z);
+			glUniform3f(cameraPosLoc, camera.cameraPos.x, camera.cameraPos.y, camera.cameraPos.z);
+			glUniform3f(cameraFt, camera.cameraFront.x, camera.cameraFront.y, camera.cameraFront.z);
+			glUniform1i(flashlightOnLoc, camera.flashlightOn ? 1 : 0);
+
+			glUniform1f(outerConeAngleLoc, camera.outerConeAngle);
+			glUniform1f(innerConeAngleLoc, camera.innerConeAngle);
+
+			//glUniform1f(maxDistanceLoc, camera.maxDistance);
+
+			/*glUniform3f(flashlightPosLoc, camera.cameraPos.x, camera.cameraPos.y, camera.cameraPos.z);
+			glUniform3f(flashlightDirLoc, camera.cameraFront.x, camera.cameraFront.y, camera.cameraFront.z);
+			glUniform1f(innerConeAngleLoc, camera.innerConeAngle);
+			glUniform1f(outerConeAngleLoc, camera.outerConeAngle);
+			glUniform1i(flashlightOnLoc, camera.flashlightOn ? 1 : 0);*/
+
+			
+			
+
 
 			//Limpiamos los buffers
 			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "translationMatrix"), 1, GL_FALSE, glm::value_ptr(translationMatrix));
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "rotationMatrix"), 1, GL_FALSE, glm::value_ptr(rotationMatrix));
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "scaleMatrix"), 1, GL_FALSE, glm::value_ptr(scaleMatrix));
-			//Cambiar textura
-			glBindTexture(GL_TEXTURE_2D, trollTexture.GetTextureID());
-			//Croma
-			trollTexture.GetCroma(troll1);
+			troll1.Render(trollTexture);
 			models[0].Render();
 
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "translationMatrix"), 1, GL_FALSE, glm::value_ptr(translationMatrix2));
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "rotationMatrix"), 1, GL_FALSE, glm::value_ptr(rotationMatrix2));
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "scaleMatrix"), 1, GL_FALSE, glm::value_ptr(scaleMatrix2));
-			//Cambiar textura
-			glBindTexture(GL_TEXTURE_2D, trollTexture.GetTextureID());
-			//Croma
-			trollTexture.GetCroma(troll2);
+			troll2.Render(trollTexture);
 			models[0].Render();
 
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "translationMatrix"), 1, GL_FALSE, glm::value_ptr(translationMatrix3));
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "rotationMatrix"), 1, GL_FALSE, glm::value_ptr(rotationMatrix3));
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "scaleMatrix"), 1, GL_FALSE, glm::value_ptr(scaleMatrix3));
-			//Cambiar textura
-			glBindTexture(GL_TEXTURE_2D, trollTexture.GetTextureID());
-			//Croma
-			trollTexture.GetCroma(troll3);
+			troll3.Render(trollTexture);
 			models[0].Render();
 
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "translationMatrix"), 1, GL_FALSE, glm::value_ptr(translationMatrix4));
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "rotationMatrix"), 1, GL_FALSE, glm::value_ptr(rotationMatrix4));
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "scaleMatrix"), 1, GL_FALSE, glm::value_ptr(scaleMatrix4));
-			//Cambiar textura
-			glBindTexture(GL_TEXTURE_2D, rockTexture.GetTextureID());
-			//Croma
-			rockTexture.GetCroma(rock1);
+			rock1.Render(rockTexture);
 			models[1].Render();
 
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "translationMatrix"), 1, GL_FALSE, glm::value_ptr(translationMatrix5));
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "rotationMatrix"), 1, GL_FALSE, glm::value_ptr(rotationMatrix5));
-			glUniformMatrix4fv(glGetUniformLocation(compiledPrograms[0], "scaleMatrix"), 1, GL_FALSE, glm::value_ptr(scaleMatrix5));
-			//Cambiar textura
-			glBindTexture(GL_TEXTURE_2D, rockTexture.GetTextureID());
-			//Croma
-			rockTexture.GetCroma(cloud1);
+			sun.Render(sunTexture);
+			models[2].Render();
+
+			moon.Render(sunTexture);
+			models[2].Render();
+
+			cloud1.Render(rockTexture);
 			models[1].Render();
+
+
 
 			// Guardar el tiempo actual para el próximo fotograma
 			lastTime = currentTime;
